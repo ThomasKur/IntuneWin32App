@@ -12,6 +12,10 @@ function Connect-MSIntuneGraph {
     .PARAMETER AccessToken
         Specify an existing access token string or token response object to use instead of acquiring a new token.
 
+    .PARAMETER ExpiresOn
+        Optionally specify the expiry time (UTC) of the provided access token. If not specified, the expiry will be
+        extracted automatically from the JWT payload. Use this parameter for opaque (non-JWT) tokens.
+
     .PARAMETER ClientID
         Application ID (Client ID) for an Azure AD service principal.
 
@@ -57,6 +61,7 @@ function Connect-MSIntuneGraph {
         1.1.0 - (2026-01-18) Fixed Issue #208: Ensured offline_access scope is included in token refresh requests to maintain refresh token continuity
         1.1.1 - (2026-01-18) Added Scopes parameter to allow users to customize requested permissions while providing sensible defaults for full module functionality
         1.1.2 - (2026-06-26) Added AccessToken parameter set to reuse an existing access token
+        1.1.3 - (2026-06-26) Fixed Issue: Automatically decode JWT exp claim to set ExpiresOn when using AccessToken parameter set; added ExpiresOn parameter for opaque tokens
     #>
     [CmdletBinding(DefaultParameterSetName = "Interactive")]
     param(
@@ -71,6 +76,10 @@ function Connect-MSIntuneGraph {
         [parameter(Mandatory = $true, ParameterSetName = "AccessToken", HelpMessage = "Specify an existing access token string or token response object to use.")]
         [ValidateNotNullOrEmpty()]
         [object]$AccessToken,
+
+        [parameter(Mandatory = $false, ParameterSetName = "AccessToken", HelpMessage = "Optionally specify the expiry time (UTC) of the provided access token. Used for opaque tokens that cannot be decoded.")]
+        [ValidateNotNullOrEmpty()]
+        [DateTimeOffset]$ExpiresOn,
         
         [parameter(Mandatory = $true, ParameterSetName = "Interactive", HelpMessage = "Application ID (Client ID) for an Entra ID service principal.")]
         [parameter(Mandatory = $true, ParameterSetName = "DeviceCode")]
@@ -237,6 +246,37 @@ function Connect-MSIntuneGraph {
 
                         if (-not [string]::IsNullOrEmpty($ClientID) -and "client_id" -notin $AccessToken.PSObject.Properties.Name) {
                             $AccessToken | Add-Member -MemberType NoteProperty -Name "client_id" -Value $ClientID -Force
+                        }
+
+                        # Ensure ExpiresOn is set so that Test-AccessToken can determine expiration correctly.
+                        # Priority: 1) explicit ExpiresOn parameter, 2) already on the token object, 3) decoded from JWT exp claim.
+                        if ($PSBoundParameters.ContainsKey("ExpiresOn")) {
+                            $AccessToken | Add-Member -MemberType NoteProperty -Name "ExpiresOn" -Value $ExpiresOn -Force
+                            Write-Verbose -Message "ExpiresOn set from explicit parameter: $($ExpiresOn.ToString('o'))"
+                        }
+                        elseif (-not $AccessToken.PSObject.Properties["ExpiresOn"] -or $null -eq $AccessToken.ExpiresOn) {
+                            # Attempt to extract the exp claim from the JWT payload
+                            try {
+                                $TokenParts = $AccessToken.access_token -split '\.'
+                                if ($TokenParts.Count -ge 2) {
+                                    $Payload = $TokenParts[1]
+                                    # Pad base64url to standard base64
+                                    $Padded = $Payload + ('=' * ((4 - ($Payload.Length % 4)) % 4))
+                                    $Bytes = [System.Convert]::FromBase64String($Padded.Replace('-', '+').Replace('_', '/'))
+                                    $Claims = [System.Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json
+                                    if ($Claims.PSObject.Properties["exp"]) {
+                                        $JwtExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$Claims.exp)
+                                        $AccessToken | Add-Member -MemberType NoteProperty -Name "ExpiresOn" -Value $JwtExpiresOn -Force
+                                        Write-Verbose -Message "ExpiresOn extracted from JWT exp claim: $($JwtExpiresOn.ToString('o'))"
+                                    }
+                                    else {
+                                        Write-Warning -Message "The JWT payload does not contain an exp claim. ExpiresOn will not be set."
+                                    }
+                                }
+                            }
+                            catch {
+                                Write-Warning -Message "Unable to decode JWT to extract ExpiresOn: $($_). Provide the -ExpiresOn parameter to set the token expiry explicitly."
+                            }
                         }
 
                         $Global:AccessToken = $AccessToken
