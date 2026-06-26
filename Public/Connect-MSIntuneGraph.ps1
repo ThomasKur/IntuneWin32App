@@ -256,27 +256,32 @@ function Connect-MSIntuneGraph {
                         }
                         elseif (-not $AccessToken.PSObject.Properties["ExpiresOn"] -or $null -eq $AccessToken.ExpiresOn) {
                             # Attempt to extract the exp claim from the JWT payload
+                            $JwtExpiresOn = $null
                             try {
                                 $TokenParts = $AccessToken.access_token -split '\.'
-                                if ($TokenParts.Count -ge 2) {
-                                    $Payload = $TokenParts[1]
-                                    # Pad base64url string to standard base64: append '=' until length is a multiple of 4
-                                    $Padded = $Payload + ('=' * ((4 - ($Payload.Length % 4)) % 4))
-                                    $Bytes = [System.Convert]::FromBase64String($Padded.Replace('-', '+').Replace('_', '/'))
-                                    $Claims = [System.Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json
-                                    if ($Claims.PSObject.Properties["exp"]) {
-                                        $JwtExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$Claims.exp)
-                                        $AccessToken | Add-Member -MemberType NoteProperty -Name "ExpiresOn" -Value $JwtExpiresOn -Force
-                                        Write-Verbose -Message "ExpiresOn extracted from JWT exp claim: $($JwtExpiresOn.ToString('o'))"
-                                    }
-                                    else {
-                                        Write-Warning -Message "The JWT payload does not contain an exp claim. ExpiresOn will not be set."
-                                    }
+                                if ($TokenParts.Count -lt 2) {
+                                    throw "Provided access token does not appear to be a JWT."
+                                }
+
+                                $Payload = $TokenParts[1]
+                                # Pad base64url string to standard base64: append '=' until length is a multiple of 4
+                                $Padded = $Payload + ('=' * ((4 - ($Payload.Length % 4)) % 4))
+                                $Bytes = [System.Convert]::FromBase64String($Padded.Replace('-', '+').Replace('_', '/'))
+                                $Claims = [System.Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json -ErrorAction Stop
+
+                                if ($Claims.PSObject.Properties["exp"]) {
+                                    $JwtExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$Claims.exp)
+                                }
+                                else {
+                                    throw "The JWT payload does not contain an exp claim."
                                 }
                             }
                             catch {
-                                Write-Warning -Message "Unable to decode JWT to extract ExpiresOn: $($_). Provide the -ExpiresOn parameter to set the token expiry explicitly."
+                                throw "Unable to determine token expiry. Provide -ExpiresOn (UTC) when using the -AccessToken parameter set. Details: $($_)"
                             }
+
+                            $AccessToken | Add-Member -MemberType NoteProperty -Name "ExpiresOn" -Value $JwtExpiresOn -Force
+                            Write-Verbose -Message "ExpiresOn extracted from JWT exp claim: $($JwtExpiresOn.ToString('o'))"
                         }
 
                         $Global:AccessToken = $AccessToken
