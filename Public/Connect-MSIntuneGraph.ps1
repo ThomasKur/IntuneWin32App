@@ -260,7 +260,7 @@ function Connect-MSIntuneGraph {
                                 $TokenParts = $AccessToken.access_token -split '\.'
                                 if ($TokenParts.Count -ge 2) {
                                     $Payload = $TokenParts[1]
-                                    # Pad base64url to standard base64
+                                    # Pad base64url string to standard base64: append '=' until length is a multiple of 4
                                     $Padded = $Payload + ('=' * ((4 - ($Payload.Length % 4)) % 4))
                                     $Bytes = [System.Convert]::FromBase64String($Padded.Replace('-', '+').Replace('_', '/'))
                                     $Claims = [System.Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json
