@@ -222,11 +222,11 @@ function Connect-MSIntuneGraph {
                             }
                         }
                         else {
-                            if (-not $AccessToken.PSObject.Properties["access_token"] -and $AccessToken.PSObject.Properties["AccessToken"]) {
+                            if ("access_token" -notin $AccessToken.PSObject.Properties.Name -and "AccessToken" -in $AccessToken.PSObject.Properties.Name) {
                                 $AccessToken | Add-Member -MemberType NoteProperty -Name "access_token" -Value $AccessToken.AccessToken -Force
                             }
 
-                            if (-not $AccessToken.PSObject.Properties["AccessToken"] -and $AccessToken.PSObject.Properties["access_token"]) {
+                            if ("AccessToken" -notin $AccessToken.PSObject.Properties.Name -and "access_token" -in $AccessToken.PSObject.Properties.Name) {
                                 $AccessToken | Add-Member -MemberType NoteProperty -Name "AccessToken" -Value $AccessToken.access_token -Force
                             }
                         }
@@ -235,7 +235,7 @@ function Connect-MSIntuneGraph {
                             throw "The provided access token does not contain an access token value."
                         }
 
-                        if (-not [string]::IsNullOrEmpty($ClientID) -and -not $AccessToken.PSObject.Properties["client_id"]) {
+                        if (-not [string]::IsNullOrEmpty($ClientID) -and "client_id" -notin $AccessToken.PSObject.Properties.Name) {
                             $AccessToken | Add-Member -MemberType NoteProperty -Name "client_id" -Value $ClientID -Force
                         }
 
