@@ -232,7 +232,7 @@ function Connect-MSIntuneGraph {
                         }
 
                         if ([string]::IsNullOrEmpty($AccessToken.AccessToken)) {
-                            throw "The provided access token does not contain an access token value."
+                            throw "Invalid access token: token value is required."
                         }
 
                         if (-not [string]::IsNullOrEmpty($ClientID) -and "client_id" -notin $AccessToken.PSObject.Properties.Name) {
