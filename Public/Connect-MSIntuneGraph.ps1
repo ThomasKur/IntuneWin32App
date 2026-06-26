@@ -9,6 +9,9 @@ function Connect-MSIntuneGraph {
     .PARAMETER TenantID
         Specify the tenant name or ID, e.g. tenant.onmicrosoft.com or <GUID>.
 
+    .PARAMETER AccessToken
+        Specify an existing access token string or token response object to use instead of acquiring a new token.
+
     .PARAMETER ClientID
         Application ID (Client ID) for an Azure AD service principal.
 
@@ -38,7 +41,7 @@ function Connect-MSIntuneGraph {
         Author:      Nickolaj Andersen
         Contact:     @NickolajA
         Created:     2021-08-31
-        Updated:     2026-01-18
+        Updated:     2026-06-26
 
         Version history:
         1.0.0 - (2021-08-31) Script created
@@ -53,6 +56,7 @@ function Connect-MSIntuneGraph {
         1.0.9 - (2026-01-18) Implemented native client certificate authentication using New-ClientCertificateAccessToken function - completes all OAuth 2.0 flows without external dependencies
         1.1.0 - (2026-01-18) Fixed Issue #208: Ensured offline_access scope is included in token refresh requests to maintain refresh token continuity
         1.1.1 - (2026-01-18) Added Scopes parameter to allow users to customize requested permissions while providing sensible defaults for full module functionality
+        1.1.2 - (2026-06-26) Added AccessToken parameter set to reuse an existing access token
     #>
     [CmdletBinding(DefaultParameterSetName = "Interactive")]
     param(
@@ -60,13 +64,19 @@ function Connect-MSIntuneGraph {
         [parameter(Mandatory = $true, ParameterSetName = "DeviceCode")]
         [parameter(Mandatory = $true, ParameterSetName = "ClientSecret")]
         [parameter(Mandatory = $true, ParameterSetName = "ClientCert")]
+        [parameter(Mandatory = $true, ParameterSetName = "AccessToken")]
         [ValidateNotNullOrEmpty()]
         [string]$TenantID,
+
+        [parameter(Mandatory = $true, ParameterSetName = "AccessToken", HelpMessage = "Specify an existing access token string or token response object to use.")]
+        [ValidateNotNullOrEmpty()]
+        [object]$AccessToken,
         
         [parameter(Mandatory = $true, ParameterSetName = "Interactive", HelpMessage = "Application ID (Client ID) for an Entra ID service principal.")]
         [parameter(Mandatory = $true, ParameterSetName = "DeviceCode")]
         [parameter(Mandatory = $true, ParameterSetName = "ClientSecret")]
         [parameter(Mandatory = $true, ParameterSetName = "ClientCert")]
+        [parameter(Mandatory = $false, ParameterSetName = "AccessToken")]
         [ValidateNotNullOrEmpty()]
         [string]$ClientID,
 
@@ -99,16 +109,18 @@ function Connect-MSIntuneGraph {
         [string[]]$Scopes = @("DeviceManagementApps.ReadWrite.All", "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementRBAC.Read.All", "Group.Read.All", "offline_access")
     )
     Begin {
-        # Determine the correct RedirectUri (also known as Reply URL) for OAuth authentication
-        Write-Verbose -Message "Using Entra ID service principal with Application ID: $($ClientID)"
+        if ($PSCmdlet.ParameterSetName -ne "AccessToken") {
+            # Determine the correct RedirectUri (also known as Reply URL) for OAuth authentication
+            Write-Verbose -Message "Using Entra ID service principal with Application ID: $($ClientID)"
 
-        # Adjust RedirectUri parameter input in case none was passed on command line
-        if ([string]::IsNullOrEmpty($RedirectUri)) {
-            # Use http://localhost for loopback redirect (dynamic port will be assigned)
-            $RedirectUri = "http://localhost"
+            # Adjust RedirectUri parameter input in case none was passed on command line
+            if ([string]::IsNullOrEmpty($RedirectUri)) {
+                # Use http://localhost for loopback redirect (dynamic port will be assigned)
+                $RedirectUri = "http://localhost"
+            }
+
+            Write-Verbose -Message "Using RedirectUri with value: $($RedirectUri)"
         }
-
-        Write-Verbose -Message "Using RedirectUri with value: $($RedirectUri)"
 
         # Set default error action preference configuration
         $ErrorActionPreference = "Stop"
@@ -193,6 +205,46 @@ function Connect-MSIntuneGraph {
                     }
                     catch {
                         Write-Error -Message "An error occurred while retrieving access token using client certificate: $($_)"
+                        return
+                    }
+                }
+                "AccessToken" {
+                    Write-Verbose -Message "Using provided access token"
+                    try {
+                        if ($AccessToken -is [hashtable]) {
+                            $AccessToken = [pscustomobject]$AccessToken
+                        }
+
+                        if ($AccessToken -is [string]) {
+                            $AccessToken = [pscustomobject]@{
+                                access_token = $AccessToken
+                                AccessToken = $AccessToken
+                            }
+                        }
+                        else {
+                            if (-not $AccessToken.PSObject.Properties["access_token"] -and $AccessToken.PSObject.Properties["AccessToken"]) {
+                                $AccessToken | Add-Member -MemberType NoteProperty -Name "access_token" -Value $AccessToken.AccessToken -Force
+                            }
+
+                            if (-not $AccessToken.PSObject.Properties["AccessToken"] -and $AccessToken.PSObject.Properties["access_token"]) {
+                                $AccessToken | Add-Member -MemberType NoteProperty -Name "AccessToken" -Value $AccessToken.access_token -Force
+                            }
+                        }
+
+                        if ([string]::IsNullOrEmpty($AccessToken.AccessToken)) {
+                            throw "The provided access token does not contain an access token value."
+                        }
+
+                        if (-not [string]::IsNullOrEmpty($ClientID) -and -not $AccessToken.PSObject.Properties["client_id"]) {
+                            $AccessToken | Add-Member -MemberType NoteProperty -Name "client_id" -Value $ClientID -Force
+                        }
+
+                        $Global:AccessToken = $AccessToken
+                        $Global:AccessTokenTenantID = $TenantID
+                        Write-Verbose -Message "Successfully configured provided access token"
+                    }
+                    catch {
+                        Write-Error -Message "An error occurred while using the provided access token: $($_)"
                         return
                     }
                 }
